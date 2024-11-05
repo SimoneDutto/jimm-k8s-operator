@@ -5,4 +5,4 @@ build:
 	charmcraft pack
 
 deploy:
-	juju deploy ./$(CHARM_FILE) --resource jimm-image=localhost:32000/jimm:latest
+	juju deploy ./$(CHARM_FILE) --resource jimm-image=ghcr.io/canonical/jimm:v3.1.12

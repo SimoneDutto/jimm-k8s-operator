@@ -18,7 +18,8 @@ from charms.certificate_transfer_interface.v0.certificate_transfer import (
 )
 from charms.data_platform_libs.v0.data_interfaces import (
     DatabaseRequires,
-    DatabaseRequiresEvent,
+    DatabaseEndpointsChangedEvent,
+    DatabaseCreatedEvent
 )
 from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
 from charms.hydra.v0.oauth import ClientConfig, OAuthInfoChangedEvent, OAuthRequirer
@@ -103,6 +104,14 @@ class DeferError(Exception):
     if the hook needs to be retried."""
 
     pass
+
+class ConnectionInfo:
+    def __init__(self, username, password, endpoints, tls, tls_ca: string):
+        self.username: string = username
+        self.password: string = password
+        self.endpoint: string = endpoints
+        self.tls: bool = tls.lower() == "true"
+        self.tls_ca: string = tls_ca
 
 
 class JimmOperatorCharm(CharmBase):
@@ -454,8 +463,12 @@ class JimmOperatorCharm(CharmBase):
         Fired on all units observing a secret after the owner of a secret has published a new revision.
         We must ensure the secret content is refreshed either here or where we fetch the secret.
         """
-        # Force a refresh of the secret content to flush old data.
-        self.model.get_secret(label=SESSION_KEY_SECRET_LABEL).get_content(refresh=True)
+        secrets = event.secret.get_content(refresh=True)
+        if secrets.get("tls") != self._state.get("tls") or secrets.get("tls_ca") != self._state.get("tls_ca"):
+            event = ConnectionInfo(self._state.username, self.state.password, self._state.endpoint, )
+            self._on_database_event(event)
+            return
+
         self._update_workload(event)
 
     def _on_start(self, event):
@@ -515,9 +528,8 @@ class JimmOperatorCharm(CharmBase):
         )
 
     @requires_state_setter
-    def _on_database_event(self, event: DatabaseRequiresEvent) -> None:
+    def _on_database_event(self, event: DatabaseEndpointsChangedEvent | DatabaseCreatedEvent | ConnectionInfo) -> None:
         """Database event handler."""
-
         if event.username is None or event.password is None:
             logger.info(
                 "(postgresql) Relation data is not complete (missing `username` or `password` field); "
@@ -529,11 +541,22 @@ class JimmOperatorCharm(CharmBase):
         ep = event.endpoints.split(",", 1)[0]
         # compose the db connection string
         uri = f"postgresql://{event.username}:{event.password}@{ep}/{DATABASE_NAME}"
+        if event.tls.lower() == "true":
+            uri += "?sslmode=require"
+        
+        uri = f"postgresql://{event.username}:{event.password}@{event.endpoints}/{DATABASE_NAME}"
+        if event.tls == "true":
+            uri += "?sslmode=require"
+        if event.tls_ca != "":
+            
 
         logger.info("received database uri: {}".format(uri))
 
         # record the connection string
-        self._state.dsn = uri
+        self._state.dsn = build_connection_string({
+            event
+        })
+        
 
         self._update_workload(event)
 
