@@ -4,6 +4,7 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 
 
+import base64
 import copy
 import json
 import os
@@ -16,10 +17,13 @@ from ops.model import ActiveStatus, BlockedStatus, WaitingStatus
 from ops.testing import ActionFailed, Harness
 
 from src.charm import (
+    HOST_KEY_LOOKUP,
     JIMM_SERVICE_NAME,
     SESSION_KEY_LOOKUP,
     WORKLOAD_CONTAINER,
     JimmOperatorCharm,
+    is_valid_private_key,
+    new_host_key,
     new_session_key,
 )
 
@@ -49,6 +53,8 @@ MINIMAL_CONFIG = {
     "private-key": "ly/dzsI9Nt/4JxUILQeAX79qZ4mygDiuYGqc2ZEiDEc=",
 }
 
+fixed_host_key = new_host_key()[HOST_KEY_LOOKUP]
+
 BASE_ENV = {
     "JIMM_DASHBOARD_LOCATION": "https://jaas.ai/models",
     "JIMM_DNS_NAME": "jimm.localhost",
@@ -67,6 +73,9 @@ BASE_ENV = {
     "JIMM_OAUTH_CLIENT_ID": OAUTH_CLIENT_ID,
     "JIMM_OAUTH_CLIENT_SECRET": OAUTH_CLIENT_SECRET,
     "JIMM_OAUTH_SCOPES": OAUTH_PROVIDER_INFO["scope"],
+    "JIMM_SSH_PORT": 17022,
+    "JIMM_SSH_HOST_KEY": fixed_host_key,
+    "JIMM_SSH_MAX_CONCURRENT_CONNECTIONS": 100,
     "JIMM_DASHBOARD_FINAL_REDIRECT_URL": "https://jaas.ai/models",
     "JIMM_SECURE_SESSION_COOKIES": True,
     "JIMM_SESSION_COOKIE_MAX_AGE": 86400,
@@ -136,6 +145,11 @@ class TestCharm(TestCase):
         self.harness.add_relation_unit(self.ingress_rel_id, "nginx-ingress/0")
 
         self.add_oauth_relation()
+
+    def use_fake_host_key(self):
+        patcher = mock.patch("src.charm.new_host_key", return_value={HOST_KEY_LOOKUP: fixed_host_key})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def use_fake_session_secret(self):
         patcher = mock.patch("src.charm.new_session_key", return_value={SESSION_KEY_LOOKUP: "test-secret"})
@@ -258,6 +272,7 @@ class TestCharm(TestCase):
 
     def test_on_pebble_ready(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.harness.enable_hooks()
         self.create_auth_model_info()
         self.add_vault_relation()
@@ -279,6 +294,7 @@ class TestCharm(TestCase):
 
     def test_on_config_changed(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.harness.enable_hooks()
         self.create_auth_model_info()
         self.add_vault_relation()
@@ -317,6 +333,7 @@ class TestCharm(TestCase):
 
     def test_postgres_secret_storage_config(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.ensure_jimm_secrets()
         self.create_auth_model_info()
         self.harness.update_config(MINIMAL_CONFIG)
@@ -336,6 +353,7 @@ class TestCharm(TestCase):
         os.environ["JUJU_CHARM_HTTP_PROXY"] = "http-proxy.canonincal.com"
         os.environ["JUJU_CHARM_HTTPS_PROXY"] = "https-proxy.canonincal.com"
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.ensure_jimm_secrets()
         self.create_auth_model_info()
         self.harness.update_config(MINIMAL_CONFIG)
@@ -376,6 +394,29 @@ class TestCharm(TestCase):
         self.assertDictEqual(
             plan.to_dict()["services"]["jimm"]["environment"],
             plan.to_dict()["services"]["jimm"]["environment"] | expected_values,
+        )
+
+    def test_ssh_config(self):
+        self.create_auth_model_info()
+        self.harness.enable_hooks()
+        self.add_vault_relation()
+        self.harness.update_config(
+            {
+                **MINIMAL_CONFIG,
+                "ssh-port": 22,
+                "ssh-max-concurrent-connections": 101,
+            }
+        )
+        container = self.harness.model.unit.get_container("jimm")
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        new_plan = self.harness.get_container_pebble_plan("jimm")
+        expected_values = {
+            "JIMM_SSH_PORT": 22,
+            "JIMM_SSH_MAX_CONCURRENT_CONNECTIONS": 101,
+        }
+        self.assertDictEqual(
+            new_plan.to_dict()["services"]["jimm"]["environment"],
+            new_plan.to_dict()["services"]["jimm"]["environment"] | expected_values,
         )
 
     def test_app_dns_address(self):
@@ -423,6 +464,7 @@ class TestCharm(TestCase):
 
     def test_audit_log_retention_config(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.harness.enable_hooks()
         self.create_auth_model_info()
         self.add_vault_relation()
@@ -469,6 +511,7 @@ class TestCharm(TestCase):
 
     def test_vault_relation_joined(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.create_auth_model_info()
         self.harness.enable_hooks()
         self.add_vault_relation()
@@ -561,6 +604,50 @@ class TestCharm(TestCase):
         self.assertTrue(len(new_session_secret) > 0)
         self.assertNotEqual(old_session_secret, new_session_secret)
 
+    def test_default_host_key_is_valid(self):
+        self.harness.enable_hooks()
+        self.create_auth_model_info()
+        self.add_vault_relation()
+        self.harness.update_config(MINIMAL_CONFIG)
+
+        container = self.harness.model.unit.get_container("jimm")
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        old_plan = self.harness.get_container_pebble_plan("jimm")
+        old_session_secret = old_plan.services[JIMM_SERVICE_NAME].environment["JIMM_SSH_HOST_KEY"]
+        # assert the default
+        self.assertTrue(is_valid_private_key(old_session_secret))
+
+    def test_set_host_key_action(self):
+        self.harness.enable_hooks()
+        self.create_auth_model_info()
+        self.add_vault_relation()
+        self.harness.update_config(MINIMAL_CONFIG)
+
+        container = self.harness.model.unit.get_container("jimm")
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        # Run the action to update the host key.
+        host_key = new_host_key()[HOST_KEY_LOOKUP]
+        base_64_host_key = base64.b64encode(host_key.encode()).decode("utf-8")
+        output = self.harness.run_action("set-host-key", {"host-key": base_64_host_key})
+        secret_id = output.results.get("secret-id")
+        secret_revisions = self.harness.get_secret_revisions(secret_id)
+        self.assertEqual(len(secret_revisions), 2)
+        new_plan = self.harness.get_container_pebble_plan("jimm")
+        new_session_secret = new_plan.services[JIMM_SERVICE_NAME].environment["JIMM_SSH_HOST_KEY"]
+        self.assertEqual(new_session_secret, host_key)
+
+    def test_set_host_key_action_invalid_key(self):
+        self.harness.enable_hooks()
+        self.create_auth_model_info()
+        self.add_vault_relation()
+        self.harness.update_config(MINIMAL_CONFIG)
+
+        container = self.harness.model.unit.get_container("jimm")
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        # Run the action to update the host key.
+        with self.assertRaises(ActionFailed):
+            self.harness.run_action("set-host-key", {"host-key": ""})
+
     @mock.patch.object(ops.model.Unit, "is_leader")
     def test_rotate_session_key_action_non_leader(self, is_leader):
         is_leader.return_value = False
@@ -575,6 +662,7 @@ class TestCharm(TestCase):
     @mock.patch.object(ops.model.Unit, "is_leader")
     def test_plan_on_non_leader(self, is_leader):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         # Ensure we are leader in order to create the secret.
         is_leader.return_value = True
         self.harness.enable_hooks()
@@ -600,6 +688,7 @@ class TestCharm(TestCase):
 
     def test_cors_allowed_origins(self):
         self.use_fake_session_secret()
+        self.use_fake_host_key()
         self.create_auth_model_info()
         self.harness.enable_hooks()
         self.add_vault_relation()

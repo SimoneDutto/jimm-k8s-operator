@@ -6,3 +6,15 @@ rotate-session-key:
     Rotates the session key. 
     This will cause all users to be logged out of their current sessions (browser and CLI) and additionally, restart JIMM.
   additionalProperties: false
+
+set-host-key:
+  description: |
+    Sets the host key for JIMM and store it in a secret. The host key format is base64 encoded.
+  params:
+    host-key:
+      type: string
+      description: base64 encoded host key
+  output:
+    secret-id:
+      type: string
+      description: The secret id where the host key is stored.
