@@ -504,7 +504,8 @@ class JimmOperatorCharm(CharmBase):
             self._update_workload(event)
         except RuntimeError:
             # This exception will be raised when trying to defer the action event.
-            warning_msg = "updating workload failed, JIMM units weren't restarted, they might not be ready"
+            warning_msg = "updating workload failed, JIMM units weren't restarted, they might not be ready.\n \
+                           No manual intervention needed."
             logger.warning(warning_msg)
             event.log(warning_msg)
 
@@ -904,7 +905,9 @@ def new_session_key():
 
 
 def new_host_key():
-    """Generate a host key dict which holds a key value pair used for securing SSH connections."""
+    """Generate a host key dict which holds a key value pair used for securing SSH connections.
+    The key is a 4096 bit RSA key generated using the charm's tls_certificates library using.
+    """
     return {HOST_KEY_LOOKUP: generate_private_key(key_size=4096).decode()}
 
 

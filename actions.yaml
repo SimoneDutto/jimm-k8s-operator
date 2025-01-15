@@ -9,7 +9,7 @@ rotate-session-key:
 
 set-host-key:
   description: |
-    Sets the host key for JIMM and store it in a secret. The host key format is base64 encoded.
+    Sets the host key for JIMM and store it in a secret. The host key format is base64 encoded PEM or RSA key.
   params:
     host-key:
       type: string
