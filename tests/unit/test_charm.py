@@ -4,7 +4,6 @@
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 
 
-import base64
 import copy
 import json
 import os
@@ -617,36 +616,73 @@ class TestCharm(TestCase):
         # assert the default
         self.assertTrue(is_valid_private_key(old_session_secret))
 
-    def test_set_host_key_action(self):
+    def test_set_host_key_config(self):
         self.harness.enable_hooks()
         self.create_auth_model_info()
+        self.add_openfga_relation()
         self.add_vault_relation()
-        self.harness.update_config(MINIMAL_CONFIG)
+        # Fake the Postgres relation.
+        self.harness.charm._state.dsn = "postgres-dsn"
 
+        # Set the config as a new secret
+        host_key = new_host_key()[HOST_KEY_LOOKUP]
+        secret_id = self.harness.add_user_secret({"hostkey": host_key})
+        self.harness.grant_secret(secret_id, "juju-jimm-k8s")
+        self.harness.update_config(MINIMAL_CONFIG)
+        self.harness.update_config({"ssh-host-key-secret-id": secret_id})
         container = self.harness.model.unit.get_container("jimm")
         self.harness.charm.on.jimm_pebble_ready.emit(container)
-        # Run the action to update the host key.
-        host_key = new_host_key()[HOST_KEY_LOOKUP]
-        base_64_host_key = base64.b64encode(host_key.encode()).decode("utf-8")
-        output = self.harness.run_action("set-host-key", {"host-key": base_64_host_key})
-        secret_id = output.results.get("secret-id")
-        secret_revisions = self.harness.get_secret_revisions(secret_id)
-        self.assertEqual(len(secret_revisions), 2)
+
         new_plan = self.harness.get_container_pebble_plan("jimm")
         new_session_secret = new_plan.services[JIMM_SERVICE_NAME].environment["JIMM_SSH_HOST_KEY"]
         self.assertEqual(new_session_secret, host_key)
 
-    def test_set_host_key_action_invalid_key(self):
+        self.assertEqual(self.harness.charm.unit.status.name, ActiveStatus.name)
+
+    def test_set_host_key_config_invalid_key(self):
         self.harness.enable_hooks()
         self.create_auth_model_info()
+        self.add_openfga_relation()
         self.add_vault_relation()
+        # Fake the Postgres relation.
+        self.harness.charm._state.dsn = "postgres-dsn"
+        # Set the config as a new secret
+        secret_id = self.harness.add_user_secret({"hostkey": "invalid-key"})
+        self.harness.grant_secret(secret_id, "juju-jimm-k8s")
         self.harness.update_config(MINIMAL_CONFIG)
+        self.harness.update_config({"ssh-host-key-secret-id": secret_id})
 
         container = self.harness.model.unit.get_container("jimm")
         self.harness.charm.on.jimm_pebble_ready.emit(container)
-        # Run the action to update the host key.
-        with self.assertRaises(ActionFailed):
-            self.harness.run_action("set-host-key", {"host-key": ""})
+        # expect the charm to be blocked
+        self.assertEqual(self.harness.charm.unit.status.name, BlockedStatus.name)
+        self.assertEqual(self.harness.charm.unit.status.message, "hostkey retrieval failed. Check juju debug logs.")
+
+    def test_change_host_key_secret_content(self):
+        self.harness.enable_hooks()
+        self.create_auth_model_info()
+        self.add_openfga_relation()
+        self.add_vault_relation()
+        # Fake the Postgres relation.
+        self.harness.charm._state.dsn = "postgres-dsn"
+
+        # Set the config as a new secret
+        host_key = new_host_key()[HOST_KEY_LOOKUP]
+        secret_id = self.harness.add_user_secret({"hostkey": "invalid"})
+        self.harness.grant_secret(secret_id, "juju-jimm-k8s")
+        self.harness.update_config(MINIMAL_CONFIG)
+        self.harness.update_config({"ssh-host-key-secret-id": secret_id})
+        container = self.harness.model.unit.get_container("jimm")
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        self.assertEqual(self.harness.charm.unit.status.name, BlockedStatus.name)
+
+        # Update the secret content
+        self.harness.set_secret_content(secret_id, {"hostkey": host_key})
+        self.harness.charm.on.jimm_pebble_ready.emit(container)
+        new_plan = self.harness.get_container_pebble_plan("jimm")
+        new_session_secret = new_plan.services[JIMM_SERVICE_NAME].environment["JIMM_SSH_HOST_KEY"]
+        self.assertEqual(new_session_secret, host_key)
+        self.assertEqual(self.harness.charm.unit.status.name, ActiveStatus.name)
 
     @mock.patch.object(ops.model.Unit, "is_leader")
     def test_rotate_session_key_action_non_leader(self, is_leader):

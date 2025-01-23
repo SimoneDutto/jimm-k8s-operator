@@ -80,6 +80,9 @@ options:
     type: int
     default: 100
     description: The maximum number of concurrent SSH connections allowed.
+  ssh-host-key-secret-id:
+    type: string
+    description: The secret ID of the SSH host key.
   uuid:
     type: string
     description: The UUID advertised by the JIMM controller.

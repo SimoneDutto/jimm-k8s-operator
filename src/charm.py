@@ -8,7 +8,7 @@ import logging
 import os
 import secrets
 import string
-from base64 import b64decode, b64encode
+from base64 import b64encode
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -129,7 +129,6 @@ class JimmOperatorCharm(CharmBase):
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.secret_changed, self.on_secret_changed)
         self.framework.observe(self.on.rotate_session_key_action, self.rotate_session_secret_key)
-        self.framework.observe(self.on.set_host_key_action, self.set_host_key)
 
         self.framework.observe(
             self.on.dashboard_relation_joined,
@@ -202,6 +201,7 @@ class JimmOperatorCharm(CharmBase):
         self.framework.observe(self.vault.on.connected, self._on_vault_connected)
         self.framework.observe(self.vault.on.ready, self._on_vault_ready)
         self.framework.observe(self.vault.on.gone_away, self._on_vault_gone_away)
+        self.framework.observe(self.on.secret_changed, self._on_secret_changed)
 
         # Grafana relation
         self._grafana_dashboards = GrafanaDashboardProvider(self, relation_name="grafana-dashboard")
@@ -247,6 +247,12 @@ class JimmOperatorCharm(CharmBase):
         )
         self.ensure_session_secret_key()
         self.ensure_hostkey_secret_key()
+
+    def _on_secret_changed(self, event: SecretChangedEvent) -> None:
+        if self.config.get("ssh-host-key-secret-id") != "" and event.secret.id == self.config.get(
+            "ssh-host-key-secret-id"
+        ):
+            self._update_workload(event)
 
     @requires_state_setter
     def _on_leader_elected(self, event) -> None:
@@ -325,9 +331,10 @@ class JimmOperatorCharm(CharmBase):
             return
 
         try:
-            host_key = self.model.get_secret(label=HOST_KEY_SECRET_LABEL).get_content()[HOST_KEY_LOOKUP]
-        except SecretNotFoundError:
-            logger.warning("host key secret not found, deferring")
+            host_key = self._get_host_key()
+        except Exception as e:
+            logger.warning(f"error retrieving host-key: {e}, deferring...")
+            self.unit.status = BlockedStatus("hostkey retrieval failed. Check juju debug logs.")
             event.defer()
             return
 
@@ -474,40 +481,6 @@ class JimmOperatorCharm(CharmBase):
             self.model.get_secret(label=HOST_KEY_SECRET_LABEL)
         except SecretNotFoundError:
             self.app.add_secret(new_host_key(), label=HOST_KEY_SECRET_LABEL)
-
-    # set_host_key is the action setting the host key. It validates the key, sets it in the secret and restarts
-    # the workload.
-    def set_host_key(self, event: ActionEvent) -> None:
-        if not self.unit.is_leader():
-            event.log("Cannot update secret from non-leader unit")
-            event.fail("Run this action on the leader unit")
-            return
-        host_key_b64 = event.params.get("host-key")
-        host_key = b64decode(host_key_b64).decode("utf-8")
-
-        if not is_valid_private_key(host_key):
-            event.log("Invalid private key: \n" + host_key)
-            event.fail("Invalid private key")
-            return
-
-        try:
-            secret = self.model.get_secret(label=HOST_KEY_SECRET_LABEL)
-            secret.set_content({HOST_KEY_LOOKUP: host_key})
-        except SecretNotFoundError:
-            secret = self.app.add_secret({HOST_KEY_LOOKUP: host_key}, label=HOST_KEY_SECRET_LABEL)
-        # Force a refresh of the secret content to flush old data.
-        secret.get_content(refresh=True)
-
-        # Set the output of the action.
-        event.set_results({"secret-id": secret.id})
-        try:
-            self._update_workload(event)
-        except RuntimeError:
-            # This exception will be raised when trying to defer the action event.
-            warning_msg = "updating workload failed, JIMM units weren't restarted, they might not be ready.\n \
-                           No manual intervention needed."
-            logger.warning(warning_msg)
-            event.log(warning_msg)
 
     def on_secret_changed(self, event: SecretChangedEvent):
         """
@@ -663,6 +636,22 @@ class JimmOperatorCharm(CharmBase):
             dns_name = self._state.dns_name
 
         return dns_name
+
+    def _get_host_key(self) -> str:
+        """
+        _get_host_key gets the host key from the user's secret set in the charm config if set or from the default secret
+        created by the charm.
+        """
+        host_key_secret_id = self.config.get("ssh-host-key-secret-id", "")
+        if not host_key_secret_id:
+            host_key = self.model.get_secret(label=HOST_KEY_SECRET_LABEL).get_content(refresh=True)[HOST_KEY_LOOKUP]
+        else:
+            host_key = self.model.get_secret(id=host_key_secret_id).get_content(refresh=True)[HOST_KEY_LOOKUP]
+
+        if not is_valid_private_key(host_key):
+            raise ValueError("Invalid private key")
+
+        return host_key
 
     @requires_state_setter
     def _on_certificates_relation_joined(self, event: RelationJoinedEvent) -> None:
@@ -918,8 +907,10 @@ def ensureFQDN(dns: str) -> str:  # noqa: N802
     return dns
 
 
-# is_valid_private_key checks if the provided key is a valid private key, either PEM or OPENSSH format.
 def is_valid_private_key(key: str):
+    """
+    is_valid_private_key checks if the provided key is a valid private key, either PEM or OPENSSH format.
+    """
     try:
         serialization.load_pem_private_key(key.encode(), password=None, backend=default_backend())
         return True
