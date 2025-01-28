@@ -39,6 +39,11 @@ from charms.traefik_k8s.v2.ingress import (
     IngressPerAppRequirer,
     IngressPerAppRevokedEvent,
 )
+
+from charms.traefik_k8s.v1.ingress_per_unit import (
+    IngressPerUnitRequirer,
+    IngressPerUnitReadyForUnitEvent,
+)
 from charms.vault_k8s.v0 import vault_kv
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -161,6 +166,20 @@ class JimmOperatorCharm(CharmBase):
             strip_prefix=True,
             port=8080,
         )
+
+        self.ingress_ssh = IngressPerUnitRequirer(
+            self,
+            relation_name="ingress-ssh",
+            mode="tcp",
+        )
+
+        self.framework.observe(
+            self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready
+        )
+        self.framework.observe(
+            self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked
+        )
+
         self.framework.observe(self.ingress.on.ready, self._on_ingress_ready)
         self.framework.observe(
             self.ingress.on.revoked,
@@ -338,6 +357,9 @@ class JimmOperatorCharm(CharmBase):
             self.unit.status = BlockedStatus("hostkey retrieval failed. Check juju debug logs.")
             event.defer()
             return
+
+        # update the ssh-port exposed by the port
+        self.ingress_ssh.provide_ingress_requirements(port=self.config.get("ssh-port"))
 
         config_values = {
             "CORS_ALLOWED_ORIGINS": self.config.get("cors-allowed-origins"),
@@ -728,6 +750,12 @@ class JimmOperatorCharm(CharmBase):
         self._state.dns_name = event.url
 
         self._update_workload(event)
+
+    def _on_ingress_ssh_ready(self, event: IngressPerUnitReadyForUnitEvent):
+        logger.info(f"Ingress for ssh at {event.url}")
+
+    def _on_ingress_ssh_revoked(self, _):
+        logger.info("I have lost my ingress URL!")
 
     @requires_state_setter
     def _on_ingress_revoked(self, event: IngressPerAppRevokedEvent) -> None:
