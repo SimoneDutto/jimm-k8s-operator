@@ -856,7 +856,7 @@ class JimmOperatorCharm(CharmBase):
             self.trusted_cert_transfer.relationship_name,
         )
         for relation in self.model.relations.get(self.trusted_cert_transfer.relationship_name, []):
-            # For some reason, relation.units includes our unit and app. Need to exclude them.
+            # here relation.units is empty for non-leader units
             for unit in set(relation.units).difference([self.app, self.unit]):
                 # Note: this nested loop handles the case of multi-unit CA, each unit providing
                 # a different ca cert, but that is not currently supported by the lib itself.
