@@ -83,6 +83,11 @@ async def deploy_jimm(
                 application_name="openfga",
                 channel="2.0/stable",
             ),
+            ops_test.model.deploy(
+                "traefik-k8s",
+                application_name="traefik",
+                channel="latest/stable",
+            ),
         )
 
     logger.info("waiting for postgresql")
@@ -110,6 +115,9 @@ async def deploy_jimm(
 
     logger.info("adding oauth relation")
     await ops_test.model.integrate(f"{APP_NAME}:oauth", hydra_app_name)
+
+    logger.info("adding traefik ssh relation")
+    await ops_test.model.integrate(f"{APP_NAME}:ingress-ssh", "traefik")
 
     await ops_test.model.wait_for_idle(timeout=2000)
     jimm_debug_info = requests.get(os.path.join(jimm_address.geturl(), "debug/info"))

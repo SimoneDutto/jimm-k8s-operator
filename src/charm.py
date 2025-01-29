@@ -34,15 +34,14 @@ from charms.tls_certificates_interface.v1.tls_certificates import (
     generate_csr,
     generate_private_key,
 )
+from charms.traefik_k8s.v1.ingress_per_unit import (
+    IngressPerUnitReadyForUnitEvent,
+    IngressPerUnitRequirer,
+)
 from charms.traefik_k8s.v2.ingress import (
     IngressPerAppReadyEvent,
     IngressPerAppRequirer,
     IngressPerAppRevokedEvent,
-)
-
-from charms.traefik_k8s.v1.ingress_per_unit import (
-    IngressPerUnitRequirer,
-    IngressPerUnitReadyForUnitEvent,
 )
 from charms.vault_k8s.v0 import vault_kv
 from cryptography.hazmat.backends import default_backend
@@ -167,18 +166,15 @@ class JimmOperatorCharm(CharmBase):
             port=8080,
         )
 
+        # Traefik ingress ssh server
         self.ingress_ssh = IngressPerUnitRequirer(
             self,
             relation_name="ingress-ssh",
             mode="tcp",
         )
 
-        self.framework.observe(
-            self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready
-        )
-        self.framework.observe(
-            self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked
-        )
+        self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
+        self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
 
         self.framework.observe(self.ingress.on.ready, self._on_ingress_ready)
         self.framework.observe(
@@ -358,8 +354,10 @@ class JimmOperatorCharm(CharmBase):
             event.defer()
             return
 
-        # update the ssh-port exposed by the port
-        self.ingress_ssh.provide_ingress_requirements(port=self.config.get("ssh-port"))
+        # Update the ssh ingress to reflect ssh port config changed. This is done in the leader unit
+        # because the ingress is per-unit and it doesn't support multiple units.
+        if self.unit.is_leader():
+            self.ingress_ssh.provide_ingress_requirements(port=self.config.get("ssh-port"))
 
         config_values = {
             "CORS_ALLOWED_ORIGINS": self.config.get("cors-allowed-origins"),
