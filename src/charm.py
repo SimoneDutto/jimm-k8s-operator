@@ -198,6 +198,7 @@ class JimmOperatorCharm(CharmBase):
             "jimm",
         )
         self.framework.observe(self.on.install, self._on_install)
+        self.framework.observe(self.on.upgrade_charm, self._on_install)
         self.framework.observe(self.vault.on.connected, self._on_vault_connected)
         self.framework.observe(self.vault.on.ready, self._on_vault_ready)
         self.framework.observe(self.vault.on.gone_away, self._on_vault_gone_away)
@@ -240,11 +241,7 @@ class JimmOperatorCharm(CharmBase):
         self._update_workload(event)
 
     def _on_install(self, event: InstallEvent) -> None:
-        self.unit.add_secret(
-            {"nonce": secrets.token_hex(16)},
-            label=VAULT_NONCE_SECRET_LABEL,
-            description="Nonce for vault-kv relation",
-        )
+        self.ensure_vault_secret_key()
         self.ensure_session_secret_key()
         self.ensure_hostkey_secret_key()
 
@@ -482,6 +479,16 @@ class JimmOperatorCharm(CharmBase):
             self.model.get_secret(label=HOST_KEY_SECRET_LABEL)
         except SecretNotFoundError:
             self.app.add_secret(new_host_key(), label=HOST_KEY_SECRET_LABEL)
+
+    def ensure_vault_secret_key(self):
+        try:
+            self.model.get_secret(label=VAULT_NONCE_SECRET_LABEL)
+        except SecretNotFoundError:
+            self.unit.add_secret(
+                {"nonce": secrets.token_hex(16)},
+                label=VAULT_NONCE_SECRET_LABEL,
+                description="Nonce for vault-kv relation",
+            )
 
     def on_secret_changed(self, event: SecretChangedEvent):
         """
