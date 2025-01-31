@@ -169,7 +169,7 @@ class JimmOperatorCharm(CharmBase):
 
         # Traefik ingress ssh server for the leader
         if self.unit.is_leader():
-            self.ingress_ssh = IngressPerUnitRequirer(self, relation_name="ingress-ssh", mode="tcp", port=17022)
+            self.ingress_ssh = IngressPerUnitRequirer(self, relation_name="ingress-ssh", mode="tcp")
             self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
             self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
 
@@ -359,9 +359,7 @@ class JimmOperatorCharm(CharmBase):
         # Update the ssh ingress to reflect ssh port config changed. This is done in the leader unit
         # because the ingress is per-unit and it doesn't support multiple units.
         if self.unit.is_leader():
-            if self._state.ssh_port != self.config.get("ssh-port"):
-                self._state.ssh_port = self.config.get("ssh-port")
-                self.ingress_ssh.provide_ingress_requirements(port=self._state.ssh_port)
+            self.ingress_ssh.provide_ingress_requirements(port=self.config.get("ssh-port"))
 
         config_values = {
             "CORS_ALLOWED_ORIGINS": self.config.get("cors-allowed-origins"),
