@@ -167,15 +167,11 @@ class JimmOperatorCharm(CharmBase):
             port=8080,
         )
 
-        # Traefik ingress ssh server
-        self.ingress_ssh = IngressPerUnitRequirer(
-            self,
-            relation_name="ingress-ssh",
-            mode="tcp",
-        )
-
-        self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
-        self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
+        # Traefik ingress ssh server for the leader
+        if self.unit.is_leader():
+            self.ingress_ssh = IngressPerUnitRequirer(self, relation_name="ingress-ssh", mode="tcp", port=17022)
+            self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
+            self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
 
         self.framework.observe(self.ingress.on.ready, self._on_ingress_ready)
         self.framework.observe(
@@ -363,7 +359,9 @@ class JimmOperatorCharm(CharmBase):
         # Update the ssh ingress to reflect ssh port config changed. This is done in the leader unit
         # because the ingress is per-unit and it doesn't support multiple units.
         if self.unit.is_leader():
-            self.ingress_ssh.provide_ingress_requirements(port=self.config.get("ssh-port"))
+            if self._state.ssh_port != self.config.get("ssh-port"):
+                self._state.ssh_port = self.config.get("ssh-port")
+                self.ingress_ssh.provide_ingress_requirements(port=self._state.ssh_port)
 
         config_values = {
             "CORS_ALLOWED_ORIGINS": self.config.get("cors-allowed-origins"),
@@ -405,7 +403,6 @@ class JimmOperatorCharm(CharmBase):
 
         if self._state.dsn:
             config_values["JIMM_DSN"] = self._state.dsn
-
         vault_config = self._vault_config()
         insecure_secret_store = self.config.get("postgres-secret-storage", False)
         if not vault_config and not insecure_secret_store:
@@ -890,12 +887,12 @@ class JimmOperatorCharm(CharmBase):
                     cert_path = TRUSTED_CA_TEMPLATE.substitute(rel_id=relation.id)
                     if cert := relation.data[unit].get("ca"):
                         certs.append([cert_path, cert])
-                # set certs in peer relation databag, if they are changed
-                if certs:
-                    certs_secret = json.loads(self.model.get_relation("peer").data[self.app].get("ca", "[]"))
-                    certs_json = json.dumps(certs)
-                    if certs_secret != certs_json:
-                        self.model.get_relation("peer").data[self.app]["ca"] = certs_json
+            # set certs in peer relation databag, if they are changed
+            if certs:
+                existing_certs_secret = json.loads(self.model.get_relation("peer").data[self.app].get("ca", "[]"))
+                certs_json = json.dumps(certs)
+                if existing_certs_secret != certs_json:
+                    self.model.get_relation("peer").data[self.app]["ca"] = certs_json
         else:
             # in non-leader units read data from the relation databag
             certs = json.loads(self.model.get_relation("peer").data[self.app].get("ca", "[]"))

@@ -22,8 +22,6 @@ from utils import deploy_jimm
 pytest_plugins = ["oauth_tools.fixtures"]
 logger = logging.getLogger(__name__)
 
-METAL_LB_IP = "10.64.140.43"
-
 
 @pytest.mark.abort_on_fail
 async def test_jimm_oauth_browser_login(
@@ -69,5 +67,5 @@ async def test_jimm_oauth_browser_login(
     # check ssh server is opened.
     # TODO(simonedutto): once the juju implementation is working, we should test it properly.
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    result = sock.connect_ex((METAL_LB_IP, 17022))
+    result = sock.connect_ex(("10.64.140.43", 17022))
     assert result == 0
