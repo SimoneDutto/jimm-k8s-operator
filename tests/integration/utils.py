@@ -71,6 +71,7 @@ async def deploy_jimm(
                     # to one of HTTP endpoints of JIMM.
                     "juju-dashboard-location": os.path.join(jimm_address.geturl(), "debug/info"),
                 },
+                num_units=2,
             ),
             ops_test.model.deploy("nginx-ingress-integrator", application_name="jimm-ingress", channel="latest/stable"),
             ops_test.model.deploy(
