@@ -167,11 +167,9 @@ class JimmOperatorCharm(CharmBase):
             port=8080,
         )
 
-        # Traefik ingress ssh server for the leader
-        if self.unit.is_leader():
-            self.ingress_ssh = IngressPerUnitRequirer(self, relation_name="ingress-ssh", mode="tcp")
-            self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
-            self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
+        self.ingress_ssh = IngressPerUnitRequirer(self, relation_name="ingress-ssh", mode="tcp")
+        self.framework.observe(self.ingress_ssh.on.ready_for_unit, self._on_ingress_ssh_ready)
+        self.framework.observe(self.ingress_ssh.on.revoked_for_unit, self._on_ingress_ssh_revoked)
 
         self.framework.observe(self.ingress.on.ready, self._on_ingress_ready)
         self.framework.observe(
